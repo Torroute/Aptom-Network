@@ -1,0 +1,229 @@
+import random
+import time
+import requests
+import socks
+import socket
+from scapy.all import IP, UDP, send
+from stem import Signal
+from stem.control import Controller
+import os
+
+# ANSI escape codes for coloring text
+def rgb_color(r, g, b):
+    return f"\033[38;2;{r};{g};{b}m"
+
+# Function to reset color back to normal
+def reset_color():
+    return "\033[0m"
+
+# Function to read .onion domains from a file
+def read_onion_domains(file_path):
+    try:
+        with open(file_path, 'r') as file:
+            onion_domains = [line.strip() for line in file if line.strip()]
+            return onion_domains
+    except Exception as e:
+        print(f"Error reading .onion domains from file: {e}")
+        return []
+
+# Function to read SOCKS5 proxy list from a file
+def read_proxies(file_path):
+    try:
+        with open(file_path, 'r') as file:
+            proxies = [line.strip() for line in file if line.strip()]
+            return proxies
+    except Exception as e:
+        print(f"Error reading proxies from file: {e}")
+        return []
+
+# Function to read DNS IPs from a file
+def read_dns(file_path):
+    try:
+        with open(file_path, 'r') as file:
+            dns_ips = [line.strip() for line in file if line.strip()]
+            return dns_ips
+    except Exception as e:
+        print(f"Error reading DNS IPs from file: {e}")
+        return []
+
+# Function to fetch proxies from an online source
+def scan_proxies():
+    print(f"{rgb_color(255, 100, 0)}Scanning for 500 proxies...{reset_color()}")
+    try:
+        # Fetching free SOCKS5 proxies from a public proxy API
+        url = "https://www.proxy-list.download/api/v1/get?type=socks5"
+        response = requests.get(url, timeout=10)
+
+        if response.status_code == 200:
+            proxies = response.text.strip().split("\r\n")
+            print(f"{rgb_color(0, 255, 0)}Fetched {len(proxies)} proxies.{reset_color()}")
+            return proxies[:500]  # Limit to 500 proxies
+        else:
+            print(f"{rgb_color(255, 0, 0)}Error fetching proxies from the API.{reset_color()}")
+            return []
+    except Exception as e:
+        print(f"{rgb_color(255, 0, 0)}Error scanning for proxies: {e}{reset_color()}")
+        return []
+
+# Function to fetch DNS IPs from an online source
+def scan_dns():
+    print(f"{rgb_color(255, 100, 0)}Scanning for 500 DNS IPs...{reset_color()}")
+    # A predefined list of public DNS IPs from well-known providers
+    dns_ips = [
+        "8.8.8.8", "8.8.4.4",  # Google DNS
+        "1.1.1.1", "1.0.0.1",  # Cloudflare DNS
+        "9.9.9.9",             # Quad9 DNS
+        "208.67.222.222", "208.67.220.220",  # OpenDNS
+        "64.6.64.6", "64.6.65.6",  # Verisign DNS
+        "77.88.8.8", "77.88.8.1",  # Yandex DNS
+        "185.228.168.9", "185.228.169.9",  # CleanBrowsing DNS
+        "76.76.19.19", "76.76.20.20",  # Comodo DNS
+    ]
+    # Ensure we have 500 DNS IPs (repeating the list if necessary)
+    dns_ips = (dns_ips * 50)[:500]
+    print(f"{rgb_color(0, 255, 0)}Fetched {len(dns_ips)} DNS IPs.{reset_color()}")
+    return dns_ips
+
+# Function to fetch .onion domains from multiple sources
+def fetch_onion_domains():
+    print(f"{rgb_color(255, 100, 0)}Fetching random .onion domains from multiple sources...{reset_color()}")
+
+    # List of sources to scrape .onion domains from
+    sources = [
+        "http://onion.ws/api/v1/search/?q=site:.onion&limit=500",  # Ahmia (existing source)
+        "https://dark.fail/api/v1/onions",  # Dark.fail (API)
+        "http://checkmyipdot.com/onionlist",  # CheckMyIP - Onion List
+        "https://www.dan.me.uk/torlist/",  # Dan.me.uk Tor list
+        "http://www.torservers.net/directory.html",  # TorServers - .onion directory
+        "https://www.onionlinks.eu/",  # OnionLinks.eu - an index of .onion domains
+        "https://www.hiddenwiki.org/",  # Hidden Wiki
+        "https://www.wikiton.com/",  # Wikiton - another .onion list source
+        "http://www.oniondir.com/",  # OnionDir - a directory of onion sites
+        "https://www.privacytools.io/tor.html",  # PrivacyTools.io list of onion sites
+        "https://www.torproject.org/community/tor-hidden-service-directories/",  # Tor Project's directory
+    ]
+
+    domains = []
+    for url in sources:
+        try:
+            response = requests.get(url, timeout=10)
+            if response.status_code == 200:
+                # Assuming each source has a way to extract .onion domains from the response
+                if 'json' in response.headers.get('Content-Type', ''):
+                    data = response.json()
+                    if isinstance(data, dict) and 'results' in data:
+                        domains.extend([item['domain'] for item in data['results']])
+                else:
+                    # Scrape text-based sites directly (this requires regex, parsing HTML, etc.)
+                    # This is a simplified method; for complex parsing, use BeautifulSoup, regex, or similar
+                    found_domains = [line.strip() for line in response.text.split("\n") if '.onion' in line]
+                    domains.extend(found_domains)
+                print(f"{rgb_color(0, 255, 0)}Successfully fetched domains from {url}{reset_color()}")
+        except Exception as e:
+            print(f"{rgb_color(255, 0, 0)}Error fetching .onion domains from {url}: {e}{reset_color()}")
+
+    # Remove duplicates and return the first 500 unique domains
+    unique_domains = list(set(domains))[:500]
+    print(f"{rgb_color(0, 255, 0)}Fetched {len(unique_domains)} unique .onion domains.{reset_color()}")
+    return unique_domains
+
+# Function to ensure necessary resources are scraped and stored in files
+def ensure_resources():
+    # Check if the files for .onion domains, proxies, and DNS IPs exist, if not scan 500
+    onion_file = "onion_list.txt"
+    proxy_file = "proxy_list.txt"
+    dns_file = "dns_list.txt"
+
+    # Ensure .onion domains
+    if not os.path.exists(onion_file) or not os.path.getsize(onion_file):
+        print(f"{rgb_color(255, 100, 0)}No .onion domains found, scraping for 500...{reset_color()}")
+        onion_domains = fetch_onion_domains()
+        if not onion_domains:
+            print(f"{rgb_color(255, 0, 0)}Error: No .onion domains available!{reset_color()}")
+            return [], [], []  # Early exit if no domains scraped
+        with open(onion_file, 'w') as file:
+            for domain in onion_domains:
+                file.write(domain + "\n")
+    else:
+        onion_domains = read_onion_domains(onion_file)
+
+    # Ensure proxies
+    if not os.path.exists(proxy_file) or not os.path.getsize(proxy_file):
+        print(f"{rgb_color(255, 100, 0)}No proxies found, scraping for 500...{reset_color()}")
+        proxies = scan_proxies()
+        if not proxies:
+            print(f"{rgb_color(255, 0, 0)}Error: No proxies available!{reset_color()}")
+            return [], [], []  # Early exit if no proxies scraped
+        with open(proxy_file, 'w') as file:
+            for proxy in proxies:
+                file.write(proxy + "\n")
+    else:
+        proxies = read_proxies(proxy_file)
+
+    # Ensure DNS IPs
+    if not os.path.exists(dns_file) or not os.path.getsize(dns_file):
+        print(f"{rgb_color(255, 100, 0)}No DNS IPs found, scraping for 500...{reset_color()}")
+        dns_ips = scan_dns()
+        if not dns_ips:
+            print(f"{rgb_color(255, 0, 0)}Error: No DNS IPs available!{reset_color()}")
+            return [], [], []  # Early exit if no DNS IPs scraped
+        with open(dns_file, 'w') as file:
+            for dns in dns_ips:
+                file.write(dns + "\n")
+    else:
+        dns_ips = read_dns(dns_file)
+
+    return onion_domains, proxies, dns_ips
+
+# Main function to run the program
+def main():
+    # Ensure resources are scraped and saved to files
+    onion_domains, proxies, dns_ips = ensure_resources()
+
+    # Check if the required resources are available
+    if not onion_domains or not proxies or not dns_ips:
+        print(f"{rgb_color(255, 0, 0)}Missing required resources (proxies, onion domains, or DNS IPs). Exiting...{reset_color()}")
+        return
+
+    # Main program loop
+    while True:
+        # Display menu
+        print(f"{rgb_color(255, 255, 255)}")
+        print("=== Load Testing Menu ===")
+        print("1. HTTP Request Load Test")
+        print("2. Proxy-based Stress Test")
+        print("3. Tordle: Proxy, Onion & DNS Rotator")
+        print("4. Exit")
+        print(f"{reset_color()}")
+
+        # User selects the test type
+        try:
+            choice = int(input("Select an option: "))
+        except ValueError:
+            print("Invalid input. Please enter a number.")
+            continue
+
+        if choice == 4:
+            print("Exiting...")
+            break
+
+        # Collect target IP, port, and duration
+        target_ip = input("Enter the target IP: ")
+        target_port = int(input("Enter the target port: "))
+        duration = int(input("Enter the test duration (in seconds): "))
+
+        if choice == 1:
+            test_type = 'http'
+        elif choice == 2:
+            test_type = 'proxy'
+        elif choice == 3:
+            test_type = 'tordle'
+        else:
+            print("Invalid choice.")
+            continue
+
+        # Run the selected test for the specified time
+        load_test(target_ip, target_port, test_type, proxies, onion_domains, dns_ips, duration)
+
+if __name__ == "__main__":
+    main()
