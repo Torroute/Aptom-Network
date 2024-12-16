@@ -4,6 +4,8 @@
 install_dependencies() {
     echo "Installing necessary dependencies..."
     pkg update
+    pkg install nmap
+    pkg install tor
     pkg upgrade -y
     pkg install -y git python php tsu
 }
